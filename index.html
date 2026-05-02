@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>秋冥 MVZ2 文本编辑器</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="app" @click="hideContextMenu" @contextmenu="hideContextMenu">
+        <div class="toolbar">
+            <h1>秋冥 MVZ2 文本编辑器 V0.3.0</h1>
+            <select class="type-selector" :value="jsonType" @change="setType($event.target.value)">
+                <option value="">-- 选择类型 --</option>
+                <optgroup v-for="cat in typeCategories" :key="cat" :label="cat">
+                    <option v-for="t in getTypesByCategory(cat)" :key="t.key" :value="t.key">{{ t.icon }} {{ t.label }}</option>
+                </optgroup>
+            </select>
+            <span v-if="jsonType" class="type-badge">{{ getTypeLabel(jsonType) }}</span>
+            <input type="file" ref="fileInput" class="hidden-file-input" accept=".json,.txt" @change="handleFileImport">
+            <button class="btn btn-secondary" @click="triggerFileImport">📁 导入</button>
+            <button class="btn btn-secondary" @click="importJson">📋 粘贴导入</button>
+            <button class="btn btn-primary" @click="exportJson">📤 导出</button>
+            <button class="btn btn-danger" @click="clearAll">🗑️ 清空</button>
+        </div>
+
+        <div class="main-container">
+            <!-- TXT编辑模式 -->
+            <template v-if="isTxtMode">
+                <div class="txt-panel">
+                    <div class="panel-header">
+                        <span>📄 标签列表 ({{ txtEntries.length }})</span>
+                        <button class="icon-btn" @click="addTxtEntry" title="添加标签">+</button>
+                    </div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'txt')">
+                        <div v-for="(entry, idx) in txtEntries" :key="idx" class="txt-entry-item"
+                             :class="{ active: currentEntryId === String(idx) }"
+                             draggable="true"
+                             @dragstart="onDragStart($event, String(idx), 'txt')"
+                             @dragover="onDragOverEntry($event)"
+                             @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragleave="onDragLeaveEntry($event)"
+                             @drop.stop="onDropEntry($event, String(idx), $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragend="onDragEnd"
+                             @click="currentEntryId = String(idx)"
+                             @contextmenu.prevent="showContextMenu($event, String(idx), 'txt')">
+                            <div class="txt-entry-header">
+                                <span class="txt-tag">[{{ entry.tag }}]</span>
+                                <button class="icon-btn delete-btn" @click.stop="deleteTxtEntry(idx)" title="删除">×</button>
+                            </div>
+                            <div class="txt-entry-value">{{ entry.value.substring(0, 60) }}{{ entry.value.length > 60 ? '...' : '' }}</div>
+                        </div>
+                        <div v-if="txtEntries.length === 0" class="empty-state" style="padding: 20px;">
+                            <div style="font-size: 12px;">导入TXT文件或点击 + 添加标签</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="txt-editor-panel">
+                    <div v-if="currentEntryId !== '' && txtEntries[Number(currentEntryId)]" class="txt-editor-content">
+                        <div class="txt-editor-entry">
+                            <div class="form-row">
+                                <label class="form-label">标签</label>
+                                <input type="text" class="form-control" :value="txtEntries[Number(currentEntryId)].tag"
+                                       @input="updateTxtEntry(Number(currentEntryId), 'tag', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">内容</label>
+                                <textarea class="form-control" :value="txtEntries[Number(currentEntryId)].value"
+                                          @input="updateTxtEntry(Number(currentEntryId), 'value', $event.target.value)"
+                                          rows="8"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    <div v-else class="empty-state">
+                        <div class="empty-icon">📄</div>
+                        <div>从左侧选择标签或点击 + 添加</div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 成就编辑模式 -->
+            <template v-else-if="jsonType === 'achievement'">
+                <div class="entries-panel" style="width: 180px;">
+                    <div class="panel-header">
+                        <span>🏆 成就列表</span>
+                        <button class="icon-btn" @click="addAchievementButton" title="添加成就">+</button>
+                    </div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'achievement')">
+                        <div v-for="btn in achievementButtons" :key="btn.id"
+                             class="entry-item" :class="{ active: currentEntryId === btn.id }"
+                             draggable="true"
+                             @dragstart="onDragStart($event, btn.id, 'achievement')"
+                             @dragover="onDragOverEntry($event)"
+                             @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragleave="onDragLeaveEntry($event)"
+                             @drop.stop="onDropEntry($event, btn.id, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragend="onDragEnd"
+                             @click="selectEntry(btn.id)"
+                             @contextmenu.prevent="showContextMenu($event, btn.id, 'achievement')">
+                            <div class="entry-header">
+                                <span class="entry-id">{{ btn.id }}</span>
+                                <button class="icon-btn delete-btn" @click.stop="deleteAchievementButton(btn.id)">×</button>
+                            </div>
+                            <div class="entry-preview">{{ btn.data.name || '(未命名)' }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="designer-panel">
+                    <div class="designer-content" v-if="jsonData.name !== undefined">
+                        <div class="form-section">
+                            <div class="section-title">📋 成就页信息</div>
+                            <div class="form-row">
+                                <label class="form-label">名称</label>
+                                <input type="text" class="form-control" :value="jsonData.name"
+                                       @input="updateAchievementField('name', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">页码</label>
+                                <input type="number" class="form-control" :value="jsonData.page"
+                                       @input="updateAchievementField('page', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">数量</label>
+                                <input type="number" class="form-control" :value="jsonData.number"
+                                       @input="updateAchievementField('number', $event.target.value)">
+                            </div>
+                        </div>
+                        <div class="form-section" v-if="currentAchievementButton">
+                            <div class="section-title">🏅 成就详情 #{{ currentEntryId }}</div>
+                            <div class="form-row">
+                                <label class="form-label">名称</label>
+                                <input type="text" class="form-control" :value="currentAchievementButton.name"
+                                       @input="updateButtonField('name', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">描述</label>
+                                <textarea class="form-control" :value="currentAchievementButton.description"
+                                          @input="updateButtonField('description', $event.target.value)"></textarea>
+                            </div>
+                            <div class="form-row-grid">
+                                <div>
+                                    <label class="form-label">index</label>
+                                    <input type="number" class="form-control" :value="currentAchievementButton.index"
+                                           @input="updateButtonField('index', $event.target.value)">
+                                </div>
+                                <div>
+                                    <label class="form-label">type</label>
+                                    <input type="number" class="form-control" :value="currentAchievementButton.type"
+                                           @input="updateButtonField('type', $event.target.value)">
+                                </div>
+                                <div>
+                                    <label class="form-label">xPosition</label>
+                                    <input type="number" class="form-control" :value="currentAchievementButton.xPosition"
+                                           @input="updateButtonField('xPosition', $event.target.value)">
+                                </div>
+                                <div>
+                                    <label class="form-label">yPosition</label>
+                                    <input type="number" class="form-control" :value="currentAchievementButton.yPosition"
+                                           @input="updateButtonField('yPosition', $event.target.value)">
+                                </div>
+                            </div>
+                            <div class="form-row-grid">
+                                <div>
+                                    <label class="form-label">isHidden</label>
+                                    <select class="form-control" :value="currentAchievementButton.isHidden"
+                                            @change="updateButtonField('isHidden', $event.target.value)">
+                                        <option :value="false">否</option>
+                                        <option :value="true">是</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label">isShown</label>
+                                    <select class="form-control" :value="currentAchievementButton.isShown"
+                                            @change="updateButtonField('isShown', $event.target.value)">
+                                        <option :value="false">否</option>
+                                        <option :value="true">是</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 谣言烛预创建编辑模式 -->
+            <template v-else-if="jsonType === 'crusher_precreate'">
+                <div class="entries-panel" style="width: 180px;">
+                    <div class="panel-header">
+                        <span>🃏 卡牌列表</span>
+                        <button class="icon-btn" @click="addCrusherCardEntry" title="添加卡牌">+</button>
+                    </div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'crusher_card')">
+                        <div v-for="card in crusherCardEntries" :key="card.id"
+                             class="entry-item" :class="{ active: currentEntryId === card.id }"
+                             draggable="true"
+                             @dragstart="onDragStart($event, card.id, 'crusher_card')"
+                             @dragover="onDragOverEntry($event)"
+                             @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragleave="onDragLeaveEntry($event)"
+                             @drop.stop="onDropEntry($event, card.id, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragend="onDragEnd"
+                             @click="selectEntry(card.id)"
+                             @contextmenu.prevent="showContextMenu($event, card.id, 'crusher_card')">
+                            <div class="entry-header">
+                                <span class="entry-id">卡牌 {{ card.id }}</span>
+                                <button class="icon-btn delete-btn" @click.stop="deleteCrusherCardEntry(card.id)">×</button>
+                            </div>
+                            <div class="entry-preview">{{ (card.data.name || []).join(' / ') }}</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="designer-panel">
+                    <div class="designer-content" v-if="jsonData.card">
+                        <div class="form-section">
+                            <div class="section-title">🃏 卡牌全局</div>
+                            <div class="form-row-grid">
+                                <div>
+                                    <label class="form-label">max_number</label>
+                                    <input type="number" class="form-control" :value="jsonData.card.max_number"
+                                           @input="updateCardGlobalField('max_number', $event.target.value)">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">sprite_index</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card.sprite_index" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateCardGlobalArrayItem('sprite_index', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardGlobalArrayItem('sprite_index', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardGlobalArrayItem('sprite_index')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">detail</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card.detail" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateCardGlobalArrayItem('detail', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardGlobalArrayItem('detail', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardGlobalArrayItem('detail')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">have</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card.have" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateCardGlobalArrayItem('have', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardGlobalArrayItem('have', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardGlobalArrayItem('have')">+ 添加</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-section" v-if="currentEntryId && jsonData.card[currentEntryId]">
+                            <div class="section-title">🎴 卡牌 #{{ currentEntryId }}</div>
+                            <div class="form-row">
+                                <label class="form-label">image_index</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card[currentEntryId].image_index" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateCardArrayField(currentEntryId, 'image_index', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardSubArrayItem(currentEntryId, 'image_index', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardSubArrayItem(currentEntryId, 'image_index')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">name</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card[currentEntryId].name" :key="i" class="array-item-wrapper">
+                                        <input type="text" class="form-control" :value="v"
+                                               @input="updateCardStringField(currentEntryId, 'name', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardSubArrayItem(currentEntryId, 'name', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardSubArrayItem(currentEntryId, 'name')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">tooltip</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card[currentEntryId].tooltip" :key="i" class="array-item-wrapper">
+                                        <input type="text" class="form-control" :value="v"
+                                               @input="updateCardStringField(currentEntryId, 'tooltip', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardSubArrayItem(currentEntryId, 'tooltip', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardSubArrayItem(currentEntryId, 'tooltip')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">researchable</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in jsonData.card[currentEntryId].researchable" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateCardArrayField(currentEntryId, 'researchable', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeCardSubArrayItem(currentEntryId, 'researchable', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addCardSubArrayItem(currentEntryId, 'researchable')">+ 添加</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-section" v-if="jsonData.candle">
+                            <div class="section-title">🕯️ 蜡烛</div>
+                            <div class="form-row">
+                                <label class="form-label">length</label>
+                                <input type="number" class="form-control" :value="jsonData.candle.length"
+                                       @input="updateCandleField('length', $event.target.value)">
+                            </div>
+                        </div>
+                        <div class="form-section" v-if="jsonData.title">
+                            <div class="section-title">📝 标题</div>
+                            <div v-for="(t, i) in jsonData.title" :key="i" class="form-row">
+                                <label class="form-label">标题{{ i }}</label>
+                                <input type="text" class="form-control" :value="t"
+                                       @input="updateTitleItem(i, $event.target.value)">
+                                <button class="array-item-remove" @click="removeTitleItem(i)">×</button>
+                            </div>
+                            <button class="array-add-btn" @click="addTitleItem">+ 添加标题</button>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 谣言烛详情编辑模式 -->
+            <template v-else-if="jsonType === 'crusher_detail'">
+                <div class="entries-panel" style="width: 180px;">
+                    <div class="panel-header"><span>🔍 详情数据</span></div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'crusher_detail')">
+                        <div v-for="section in crusherDetailSections" :key="section.key" style="margin-bottom: 12px;">
+                            <div class="section-label">{{ section.label }}</div>
+                            <button class="btn btn-secondary" style="font-size: 11px; margin-bottom: 4px;"
+                                    @click="addCrusherDetailEntry(section.key)">+ 添加</button>
+                            <div v-for="entry in section.entries" :key="entry.id"
+                                 class="entry-item" :class="{ active: navLevel1 === section.key && currentEntryId === entry.id }"
+                                 draggable="true"
+                                 @dragstart="onDragStart($event, entry.id, 'crusher_detail', section.key)"
+                                 @dragover="onDragOverEntry($event)"
+                                 @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                                 @dragleave="onDragLeaveEntry($event)"
+                                 @drop.stop="onDropEntry($event, entry.id, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                                 @dragend="onDragEnd"
+                                 @click="navLevel1 = section.key; selectEntry(entry.id)"
+                                 @contextmenu.prevent="showContextMenu($event, entry.id, 'crusher_detail', section.key)">
+                                <div class="entry-header">
+                                    <span class="entry-id">{{ section.label }} #{{ entry.id }}</span>
+                                    <button class="icon-btn delete-btn" @click.stop="deleteCrusherDetailEntry(section.key, entry.id)">×</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="designer-panel">
+                    <div class="designer-content" v-if="currentCrusherDetailEntry">
+                        <div class="form-section" v-if="navLevel1 === 'research'">
+                            <div class="section-title">🔬 研究 #{{ currentEntryId }}</div>
+                            <div class="form-row-grid">
+                                <div>
+                                    <label class="form-label">sprite_index</label>
+                                    <input type="number" class="form-control" :value="currentCrusherDetailEntry.sprite_index"
+                                           @input="updateDetailField('research', currentEntryId, 'sprite_index', $event.target.value)">
+                                </div>
+                                <div>
+                                    <label class="form-label">place</label>
+                                    <input type="number" class="form-control" :value="currentCrusherDetailEntry.place"
+                                           @input="updateDetailField('research', currentEntryId, 'place', $event.target.value)">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-section" v-if="navLevel1 === 'present'">
+                            <div class="section-title">🎁 出示 #{{ currentEntryId }}</div>
+                            <div class="form-row">
+                                <label class="form-label">shape</label>
+                                <input type="number" class="form-control" :value="currentCrusherDetailEntry.shape"
+                                       @input="updateDetailField('present', currentEntryId, 'shape', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">order</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in currentCrusherDetailEntry.order" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateDetailArray('present', currentEntryId, 'order', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeDetailArrayItem('present', currentEntryId, 'order', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addDetailArrayItem('present', currentEntryId, 'order')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">character</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in currentCrusherDetailEntry.character" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateDetailArray('present', currentEntryId, 'character', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeDetailArrayItem('present', currentEntryId, 'character', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addDetailArrayItem('present', currentEntryId, 'character')">+ 添加</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">value</label>
+                                <div class="array-editor">
+                                    <div v-for="(v, i) in currentCrusherDetailEntry.value" :key="i" class="array-item-wrapper">
+                                        <input type="number" class="form-control" :value="v"
+                                               @input="updateDetailArray('present', currentEntryId, 'value', i, $event.target.value)">
+                                        <button class="array-item-remove" @click="removeDetailArrayItem('present', currentEntryId, 'value', i)">×</button>
+                                    </div>
+                                    <button class="array-add-btn" @click="addDetailArrayItem('present', currentEntryId, 'value')">+ 添加</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 对话编辑模式 (所有对话类型) -->
+            <template v-else-if="isDialogType(jsonType)">
+                <div class="days-panel" v-if="hasNavLevel1(jsonType)">
+                    <div class="panel-header">
+                        <span>{{ jsonType === 'dialog_level_day' ? '场景' : '章节天数' }}</span>
+                        <button class="icon-btn" @click="addNavLevel1" title="添加">+</button>
+                    </div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'nav')">
+                        <div v-for="key in sortedNavLevel1" :key="key"
+                             class="day-item" :class="{ active: navLevel1 === key }"
+                             draggable="true"
+                             @dragstart="onDragStart($event, key, 'nav')"
+                             @dragover="onDragOverEntry($event)"
+                             @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragleave="onDragLeaveEntry($event)"
+                             @drop.stop="onDropEntry($event, key, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                             @dragend="onDragEnd"
+                             @click="selectNavLevel1(key)"
+                             @contextmenu.prevent="showContextMenu($event, key, 'nav')">
+                            <span>{{ key }}</span>
+                            <div class="day-actions">
+                                <button class="icon-btn delete-btn" @click.stop="deleteNavLevel1(key)">×</button>
+                            </div>
+                        </div>
+                        <div v-if="sortedNavLevel1.length === 0" class="empty-state" style="padding: 20px;">
+                            <div style="font-size: 12px;">点击 + 添加</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="entries-panel">
+                    <div class="panel-header">
+                        <span>对话条目</span>
+                        <button class="icon-btn" @click="addEntry" title="添加条目"
+                                :disabled="hasNavLevel1(jsonType) && !navLevel1">+</button>
+                    </div>
+                    <div class="panel-content" @wheel.prevent="onListWheel($event, 'dialog')">
+                        <div v-if="!hasNavLevel1(jsonType) || navLevel1">
+                            <div v-for="entry in sortedEntries" :key="entry.id"
+                                 class="entry-item" :class="{ active: currentEntryId === entry.id }"
+                                 draggable="true"
+                                 @dragstart="onDragStart($event, entry.id, 'dialog')"
+                                 @dragover="onDragOverEntry($event)"
+                                 @dragenter="onDragEnterEntry($event, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                                 @dragleave="onDragLeaveEntry($event)"
+                                 @drop.stop="onDropEntry($event, entry.id, $event.offsetY < $event.currentTarget.offsetHeight / 2 ? 'top' : 'bottom')"
+                                 @dragend="onDragEnd"
+                                 @click="selectEntry(entry.id)"
+                                 @contextmenu.prevent="showContextMenu($event, entry.id, 'dialog')">
+                                <div class="entry-header">
+                                    <span class="entry-id">{{ entry.id }}</span>
+                                    <div style="display: flex; gap: 4px; align-items: center;">
+                                        <span v-if="isRecycleDialogType(jsonType) && entry.data.sayingOne !== undefined" class="entry-character">{{ getCharacterLabel(entry.data.sayingOne) }}</span>
+                                        <span v-else-if="entry.data.character !== undefined" class="entry-character">{{ getCharacterLabel(entry.data.character) }}</span>
+                                        <button class="icon-btn delete-btn" @click.stop="deleteEntry(entry.id)">×</button>
+                                    </div>
+                                </div>
+                                <div class="entry-preview">{{ isRecycleDialogType(jsonType) ? (entry.data.txt_0 || '(无文本)') : (entry.data.text || '(无文本)') }}</div>
+                                <div class="entry-meta" v-if="hasMeta(entry.data)">
+                                    <span v-if="entry.data.effect" class="badge effect">特效</span>
+                                    <span v-if="entry.data.action" class="badge action">动作</span>
+                                    <span v-if="isRecycleDialogType(jsonType) ? entry.data.sound !== undefined : entry.data.sound_index !== undefined" class="badge">音效</span>
+                                    <span v-if="isRecycleDialogType(jsonType) ? entry.data.index !== undefined : entry.data.sprite_index !== undefined" class="badge">立绘</span>
+                                    <span v-if="isRecycleDialogType(jsonType) && entry.data.txt_1" class="badge">译文</span>
+                                </div>
+                            </div>
+                            <div v-if="sortedEntries.length === 0" class="empty-state" style="padding: 40px 20px;">
+                                <div style="font-size: 12px; color: var(--text-secondary);">点击 + 添加条目</div>
+                            </div>
+                        </div>
+                        <div v-else class="empty-state">
+                            <div style="font-size: 12px;">先选择一个{{ jsonType === 'dialog_level_day' ? '场景' : '天数' }}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="designer-panel">
+                    <div class="designer-content" v-if="currentEntry">
+
+                        <template v-if="isRecycleDialogType(jsonType)">
+                            <div class="form-section">
+                                <div class="section-title">📋 基础信息</div>
+                                <div class="form-row">
+                                    <label class="form-label">条目ID</label>
+                                    <div>
+                                        <input type="text" class="form-control" :value="currentEntryId"
+                                               @change="updateEntryId($event.target.value)" placeholder="01">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="section-title">👤 角色控制</div>
+                                <div class="form-row">
+                                    <label class="form-label">说话人(sayingOne)</label>
+                                    <div>
+                                        <select class="form-control" :value="currentEntry.sayingOne === undefined ? '' : currentEntry.sayingOne"
+                                                @change="updateField('sayingOne', $event.target.value === '' ? undefined : Number($event.target.value))">
+                                            <option value="">-- 无 --</option>
+                                            <option v-for="c in activeCharacterOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
+                                        </select>
+                                        <button v-if="currentEntry.sayingOne !== undefined" class="btn btn-primary" @click="updateField('sayingOne',undefined)">清除</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label class="form-label">立绘索引(index)</label>
+                                    <div>
+                                        <input type="number" class="form-control" :value="currentEntry.index"
+                                               @input="updateField('index', Number($event.target.value))" placeholder="立绘编号">
+                                        <button v-if="currentEntry.index !== undefined" class="btn btn-primary" @click="updateField('index',undefined)">清除</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label class="form-label">音效(sound)</label>
+                                    <div>
+                                        <input type="text" class="form-control" :value="currentEntry.sound"
+                                               @input="updateField('sound', $event.target.value)" placeholder="数字或sndTwinkle">
+                                        <button v-if="currentEntry.sound !== undefined" class="btn btn-primary" @click="updateField('sound',undefined)">清除</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="section-title">💬 文本内容</div>
+                                <div class="form-row">
+                                    <label class="form-label">中文文本(txt_0)</label>
+                                    <textarea class="form-control" :value="currentEntry.txt_0"
+                                              @input="updateField('txt_0', $event.target.value)"
+                                              placeholder="输入中文文本..." rows="4"></textarea>
+                                </div>
+                                <div class="form-row">
+                                    <label class="form-label">英文文本(txt_1)</label>
+                                    <textarea class="form-control" :value="currentEntry.txt_1"
+                                              @input="updateField('txt_1', $event.target.value)"
+                                              placeholder="输入英文译文(可选)..." rows="3"></textarea>
+                                    <button v-if="currentEntry.txt_1 !== undefined" class="btn btn-primary" @click="updateField('txt_1',undefined)">清除</button>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="section-title">✨ 视觉效果 (Effect)</div>
+                                <div class="form-row">
+                                    <label class="form-label">特效数组</label>
+                                    <div>
+                                        <div class="input-group">
+                                            <input type="text" class="form-control" placeholder="类型" :value="effectArray[0]" @input="updateEffect(0, $event.target.value)">
+                                            <input type="number" class="form-control" placeholder="参数1" :value="effectArray[1]" @input="updateEffect(1, $event.target.value)">
+                                            <input type="number" class="form-control" placeholder="参数2" :value="effectArray[2]" @input="updateEffect(2, $event.target.value)">
+                                            <input type="number" class="form-control" placeholder="参数3" :value="effectArray[3]" @input="updateEffect(3, $event.target.value)">
+                                        </div>
+                                        <button v-if="currentEntry.effect" class="btn btn-primary" @click="updateField('effect',undefined)">清除特效</button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="form-section">
+                                <div class="section-title">⚡ 动作指令 (Action)</div>
+                                <div class="action-editor">
+                                    <div class="action-type-selector">
+                                        <button v-for="action in activeActionTypes" :key="action.key"
+                                                class="action-type-btn" :class="{ active: hasAction(action.key) }"
+                                                @click="toggleAction(action.key)">
+                                            {{ action.label }}
+                                        </button>
+                                    </div>
+
+                                    <div v-if="currentEntry.action && Object.keys(currentEntry.action).length > 0" class="action-config">
+                                        <div v-for="(config, actionKey) in currentEntry.action" :key="actionKey"
+                                             style="margin-bottom: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 6px;">
+                                            <div style="font-weight: bold; color: var(--accent); margin-bottom: 8px; font-size: 13px;">
+                                                {{ getActionLabel(actionKey) }}
+                                            </div>
+
+                                            <div v-if="actionKey === 'character_create'" style="margin-bottom: 12px;">
+                                                <div v-for="(char, idx) in config.character" :key="idx"
+                                                     style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+                                                    <input type="number" class="form-control" style="width: 80px;"
+                                                           :value="config.character[idx]" @input="updateArrayItem(config, 'character', idx, $event.target.value)" placeholder="角色ID">
+                                                    <input type="number" class="form-control" style="width: 80px;"
+                                                           :value="config.index[idx]" @input="updateArrayItem(config, 'index', idx, $event.target.value)" placeholder="立绘">
+                                                    <select class="form-control" style="width: 100px;"
+                                                            :value="config.pos[idx]" @change="updateArrayItem(config, 'pos', idx, $event.target.value)">
+                                                        <option v-for="p in positionOptions" :key="p.value" :value="p.value">{{ p.label }}</option>
+                                                    </select>
+                                                    <button class="btn btn-danger" style="padding: 4px 8px;" @click="config.character.splice(idx,1); config.index.splice(idx,1); config.pos.splice(idx,1); syncJsonText()">×</button>
+                                                </div>
+                                                <button class="btn btn-secondary" style="font-size: 12px;" @click="config.character.push(0); config.index.push(1); config.pos.push(-1); syncJsonText()">+ 添加角色</button>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_over'" style="margin-bottom: 12px;">
+                                                <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                    <option v-for="o in characterOverOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                                                </select>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'choose'" style="margin-bottom: 12px;">
+                                                <div class="form-row">
+                                                    <label class="form-label">选项数</label>
+                                                    <input type="number" class="form-control" :value="config.types" @input="updateChooseField('types', $event.target.value)">
+                                                </div>
+                                                <div v-for="(txt, idx) in config.txt_0" :key="idx"
+                                                     style="display: flex; gap: 8px; margin-bottom: 6px; align-items: center;">
+                                                    <span style="font-size: 11px; color: var(--text-secondary); width: 20px;">{{ idx+1 }}</span>
+                                                    <input type="text" class="form-control" :value="config.txt_0[idx]"
+                                                           @input="config.txt_0[idx] = $event.target.value; syncJsonText()" placeholder="选项文本">
+                                                    <input type="number" class="form-control" style="width: 60px;" :value="config.sayingOne[idx]"
+                                                           @input="config.sayingOne[idx] = toNumberOrString($event.target.value); syncJsonText()" placeholder="角色">
+                                                    <input type="number" class="form-control" style="width: 60px;" :value="config.order[idx]"
+                                                           @input="config.order[idx] = toNumberOrString($event.target.value); syncJsonText()" placeholder="顺序">
+                                                    <button class="btn btn-danger" style="padding: 4px 8px;" @click="config.txt_0.splice(idx,1); config.sayingOne.splice(idx,1); config.order.splice(idx,1); config.types = Math.max(0, config.types - 1); syncJsonText()">×</button>
+                                                </div>
+                                                <button class="btn btn-secondary" style="font-size: 12px;" @click="config.txt_0.push('新选项'); config.sayingOne.push(-1); config.order.push(1); config.types = (config.types||0)+1; syncJsonText()">+ 添加选项</button>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_show'" style="margin-bottom: 12px;">
+                                                <div class="form-row">
+                                                    <label class="form-label">精灵名称(spr)</label>
+                                                    <input type="text" class="form-control" :value="config.spr" @input="updateActionObject(actionKey, 'spr', $event.target.value)">
+                                                </div>
+                                                <div class="form-row" v-if="config.index !== undefined">
+                                                    <label class="form-label">索引(index)</label>
+                                                    <input type="number" class="form-control" :value="config.index" @input="updateActionObject(actionKey, 'index', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_wait'" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;">
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">等待帧数(timer)</label>
+                                                    <input type="number" class="form-control" :value="config.timer" @input="updateActionObject(actionKey, 'timer', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">指令序号(order)</label>
+                                                    <input type="number" class="form-control" :value="config.order" @input="updateActionObject(actionKey, 'order', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">偏移角色(offsetSayingOne)</label>
+                                                    <input type="number" class="form-control" :value="config.offsetSayingOne" @input="updateActionObject(actionKey, 'offsetSayingOne', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_background_on'" style="margin-bottom: 12px;">
+                                                <div class="form-row">
+                                                    <label class="form-label">精灵名称(spr)</label>
+                                                    <input type="text" class="form-control" :value="config.spr" @input="updateActionObject(actionKey, 'spr', $event.target.value)">
+                                                </div>
+                                                <div class="form-row" v-if="config.index !== undefined">
+                                                    <label class="form-label">索引(index)</label>
+                                                    <input type="number" class="form-control" :value="config.index" @input="updateActionObject(actionKey, 'index', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'ColorScreen'" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;">
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">速度(speed)</label>
+                                                    <input type="number" class="form-control" step="0.001" :value="config.speed" @input="updateActionObject(actionKey, 'speed', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">透明度(alpha)</label>
+                                                    <input type="number" class="form-control" step="0.1" min="0" max="1" :value="config.alpha" @input="updateActionObject(actionKey, 'alpha', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">持续时间(time)</label>
+                                                    <input type="number" class="form-control" :value="config.time" @input="updateActionObject(actionKey, 'time', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_change_image'" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                                <div>
+                                                    <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">目标角色ID</label>
+                                                    <input type="number" class="form-control" :value="config.character" @input="updateActionObject(actionKey, 'character', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">新立绘索引</label>
+                                                    <input type="number" class="form-control" :value="config.index" @input="updateActionObject(actionKey, 'index', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'set_volume'" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                                <div>
+                                                    <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">目标音量</label>
+                                                    <input type="number" class="form-control" step="0.01" :value="config.to" @input="updateActionObject(actionKey, 'to', $event.target.value)">
+                                                </div>
+                                                <div>
+                                                    <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">过渡速度</label>
+                                                    <input type="number" class="form-control" step="0.01" :value="config.speed" @input="updateActionObject(actionKey, 'speed', $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'music_play'" style="margin-bottom: 12px;">
+                                                <input type="text" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="BGM资源名称">
+                                            </div>
+
+                                            <div v-else-if="['character_leave', 'character_falldown'].includes(actionKey)" style="margin-bottom: 12px;">
+                                                <div class="input-group">
+                                                    <input v-for="(v, i) in config" :key="i" type="number" class="form-control" :value="v"
+                                                           @input="updateActionArray(actionKey, i, $event.target.value)">
+                                                </div>
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'show_message'" style="margin-bottom: 12px;">
+                                                <input type="text" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="消息内容">
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'order_turn_to'" style="margin-bottom: 12px;">
+                                                <input type="number" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="跳转条目编号">
+                                            </div>
+
+                                            <div v-else-if="actionKey === 'character_background_off'" style="margin-bottom: 12px;">
+                                                <input type="number" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="1">
+                                            </div>
+
+                                            <div v-else style="margin-bottom: 12px;">
+                                                <input v-if="typeof config === 'number'" type="number" class="form-control" :value="config"
+                                                       @input="updateActionValue(actionKey, $event.target.value)">
+                                                <input v-else-if="typeof config === 'string'" type="text" class="form-control" :value="config"
+                                                       @input="updateActionValue(actionKey, $event.target.value)">
+                                                <div v-else style="font-size: 11px; color: var(--text-secondary);">复杂对象，请在JSON源码中编辑</div>
+                                            </div>
+
+                                            <button class="btn btn-danger" style="font-size: 12px;" @click="removeAction(actionKey)">删除此动作</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template v-else>
+                        <div class="form-section">
+                            <div class="section-title">📋 基础信息</div>
+                            <div class="form-row">
+                                <label class="form-label">条目ID</label>
+                                <div>
+                                    <input type="text" class="form-control" :value="currentEntryId"
+                                           @change="updateEntryId($event.target.value)" placeholder="001">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="section-title">👤 角色控制</div>
+                            <div class="form-row">
+                                <label class="form-label">角色ID</label>
+                                <div>
+                                    <select class="form-control" :value="currentEntry.character === undefined ? '' : currentEntry.character"
+                                            @change="updateField('character', $event.target.value === '' ? undefined : Number($event.target.value))">
+                                        <option value="">-- 无 --</option>
+                                        <option v-for="c in characterOptions" :key="c.value" :value="c.value">{{ c.label }}</option>
+                                    </select>
+                                    <button v-if="currentEntry.character !== undefined" class="btn btn-primary" @click="updateField('character',undefined)">清除</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">立绘索引</label>
+                                <div>
+                                    <input type="number" class="form-control" :value="currentEntry.sprite_index"
+                                           @input="updateField('sprite_index', Number($event.target.value))" placeholder="立绘编号">
+                                    <button v-if="currentEntry.sprite_index !== undefined" class="btn btn-primary" @click="updateField('sprite_index',undefined)">清除</button>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">音效索引</label>
+                                <div>
+                                    <input type="text" class="form-control" :value="currentEntry.sound_index"
+                                           @input="updateField('sound_index', $event.target.value)" placeholder="数字或sndShort2">
+                                    <button v-if="currentEntry.sound_index !== undefined" class="btn btn-primary" @click="updateField('sound_index',undefined)">清除</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="section-title">💬 文本内容</div>
+                            <div class="form-row">
+                                <label class="form-label">对话文本</label>
+                                <textarea class="form-control" :value="currentEntry.text"
+                                          @input="updateField('text', $event.target.value)"
+                                          placeholder="输入对话文本..." rows="4"></textarea>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="section-title">✨ 视觉效果 (Effect)</div>
+                            <div class="form-row">
+                                <label class="form-label">特效数组</label>
+                                <div>
+                                    <div class="input-group">
+                                        <input type="number" class="form-control" placeholder="类型" :value="effectArray[0]" @input="updateEffect(0, $event.target.value)">
+                                        <input type="number" class="form-control" placeholder="参数1" :value="effectArray[1]" @input="updateEffect(1, $event.target.value)">
+                                        <input type="number" class="form-control" placeholder="参数2" :value="effectArray[2]" @input="updateEffect(2, $event.target.value)">
+                                        <input type="number" class="form-control" placeholder="参数3" :value="effectArray[3]" @input="updateEffect(3, $event.target.value)">
+                                    </div>
+                                    <button v-if="currentEntry.effect" class="btn btn-primary" @click="updateField('effect',undefined)">清除特效</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section">
+                            <div class="section-title">⚡ 动作指令 (Action)</div>
+                            <div class="action-editor">
+                                <div class="action-type-selector">
+                                    <button v-for="action in actionTypes" :key="action.key"
+                                            class="action-type-btn" :class="{ active: hasAction(action.key) }"
+                                            @click="toggleAction(action.key)">
+                                        {{ action.label }}
+                                    </button>
+                                </div>
+
+                                <div v-if="currentEntry.action && Object.keys(currentEntry.action).length > 0" class="action-config">
+                                    <div v-for="(config, actionKey) in currentEntry.action" :key="actionKey"
+                                         style="margin-bottom: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 6px;">
+                                        <div style="font-weight: bold; color: var(--accent); margin-bottom: 8px; font-size: 13px;">
+                                            {{ getActionLabel(actionKey) }}
+                                        </div>
+
+                                        <div v-if="actionKey === 'character_create'" style="margin-bottom: 12px;">
+                                            <div v-for="(char, idx) in config.character" :key="idx"
+                                                 style="display: flex; gap: 8px; margin-bottom: 8px; align-items: center;">
+                                                <input type="number" class="form-control" style="width: 80px;"
+                                                       :value="config.character[idx]" @input="updateArrayItem(config, 'character', idx, $event.target.value)" placeholder="角色ID">
+                                                <input type="number" class="form-control" style="width: 80px;"
+                                                       :value="config.sprite_index[idx]" @input="updateArrayItem(config, 'sprite_index', idx, $event.target.value)" placeholder="立绘">
+                                                <select class="form-control" style="width: 100px;"
+                                                        :value="config.position[idx]" @change="updateArrayItem(config, 'position', idx, $event.target.value)">
+                                                    <option v-for="p in positionOptions" :key="p.value" :value="p.value">{{ p.label }}</option>
+                                                </select>
+                                                <button class="btn btn-danger" style="padding: 4px 8px;" @click="removeCharacterCreateItem(config, idx)">×</button>
+                                            </div>
+                                            <button class="btn btn-secondary" style="font-size: 12px;" @click="addCharacterCreateItem(config)">+ 添加角色</button>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'character_over'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option v-for="o in characterOverOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'dialog_type'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option v-for="o in dialogTypeOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'choose'" style="margin-bottom: 12px;">
+                                            <div class="form-row">
+                                                <label class="form-label">标题</label>
+                                                <input type="text" class="form-control" :value="config.title" @input="updateChooseTitle($event.target.value)">
+                                            </div>
+                                            <div class="form-row">
+                                                <label class="form-label">选项数</label>
+                                                <input type="number" class="form-control" :value="config.types" @input="updateChooseField('types', $event.target.value)">
+                                            </div>
+                                            <div v-for="(txt, idx) in config.text" :key="idx"
+                                                 style="display: flex; gap: 8px; margin-bottom: 6px; align-items: center;">
+                                                <span style="font-size: 11px; color: var(--text-secondary); width: 20px;">{{ idx+1 }}</span>
+                                                <input type="text" class="form-control" :value="config.text[idx]"
+                                                       @input="updateChooseText(config, idx, $event.target.value)" placeholder="选项文本">
+                                                <input type="number" class="form-control" style="width: 60px;" :value="config.character[idx]"
+                                                       @input="updateChooseArrayItem('character', idx, $event.target.value)" placeholder="角色">
+                                                <input type="number" class="form-control" style="width: 60px;" :value="config.order[idx]"
+                                                       @input="updateChooseArrayItem('order', idx, $event.target.value)" placeholder="顺序">
+                                                <button class="btn btn-danger" style="padding: 4px 8px;" @click="removeChooseOption(config, idx)">×</button>
+                                            </div>
+                                            <button class="btn btn-secondary" style="font-size: 12px;" @click="addChooseOption(config)">+ 添加选项</button>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'set_volume'" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">目标音量</label>
+                                                <input type="number" class="form-control" step="0.01" :value="config.to" @input="updateActionObject(actionKey, 'to', $event.target.value)">
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">过渡速度</label>
+                                                <input type="number" class="form-control" step="0.01" :value="config.speed" @input="updateActionObject(actionKey, 'speed', $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'music_play'" style="margin-bottom: 12px;">
+                                            <input type="text" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="BGM资源名称">
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'room_goto'" style="margin-bottom: 12px;">
+                                            <input type="text" class="form-control" :value="config" @input="updateActionValue(actionKey, $event.target.value)" placeholder="房间名称，如 roomPaper">
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'level_main'" style="margin-bottom: 12px;">
+                                            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px;">
+                                                <div v-for="(val, subKey) in config" :key="subKey">
+                                                    <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">{{ subKey }}</label>
+                                                    <input v-if="!Array.isArray(val)" type="number" class="form-control" :value="val"
+                                                           @input="updateLevelMainSubField(subKey, $event.target.value)">
+                                                    <div v-else class="input-group">
+                                                        <input v-for="(v, i) in val" :key="i" type="number" class="form-control" :value="v"
+                                                               @input="updateLevelMainArrayItem(subKey, i, $event.target.value)">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'plot_room'" style="margin-bottom: 12px;">
+                                            <div v-for="(val, subKey) in config" :key="subKey">
+                                                <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">{{ subKey }}</label>
+                                                <input type="number" class="form-control" :value="val" @input="updatePlotRoomSubField(subKey, $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'color_screen'" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;">
+                                            <div>
+                                                <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">颜色</label>
+                                                <input type="number" class="form-control" :value="config.color" @input="updateActionObject(actionKey, 'color', $event.target.value)">
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">速度</label>
+                                                <input type="number" class="form-control" :value="config.speed" @input="updateActionObject(actionKey, 'speed', $event.target.value)">
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">透明度</label>
+                                                <input type="number" class="form-control" step="0.1" min="0" max="1" :value="config.alpha" @input="updateActionObject(actionKey, 'alpha', $event.target.value)">
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 10px; color: var(--text-secondary); display: block; margin-bottom: 4px;">持续时间</label>
+                                                <input type="number" class="form-control" :value="config.time" @input="updateActionObject(actionKey, 'time', $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'character_change_image'" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">目标角色ID</label>
+                                                <input type="number" class="form-control" :value="config.character" @input="updateActionObject(actionKey, 'character', $event.target.value)">
+                                            </div>
+                                            <div>
+                                                <label style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 4px;">新立绘索引</label>
+                                                <input type="number" class="form-control" :value="config.index" @input="updateActionObject(actionKey, 'index', $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="['character_leave', 'character_destroy', 'camera_move'].includes(actionKey)" style="margin-bottom: 12px;">
+                                            <div class="input-group">
+                                                <input v-for="(v, i) in config" :key="i" type="number" class="form-control" :value="v"
+                                                       @input="updateActionArray(actionKey, i, $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="['instance_create_depth', 'summon_zombie'].includes(actionKey)" style="margin-bottom: 12px;">
+                                            <div class="input-group">
+                                                <input v-for="(v, i) in config" :key="i" type="number" class="form-control" :value="v"
+                                                       :placeholder="['数量','类型','行数','强度'][i] || ('参数'+i)"
+                                                       @input="updateActionArray(actionKey, i, $event.target.value)">
+                                            </div>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'bubble_image'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 默认样式</option>
+                                                <option :value="1">1 - 特殊对话框样式</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'show_bubble'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 隐藏对话框</option>
+                                                <option :value="1">1 - 显示对话框</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'fading'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 停止淡出</option>
+                                                <option :value="1">1 - 开始场景淡出</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'awake'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 无变化</option>
+                                                <option :value="1">1 - 角色苏醒</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'talking'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 停止说话</option>
+                                                <option :value="1">1 - 开始说话</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else-if="actionKey === 'music_stop'" style="margin-bottom: 12px;">
+                                            <select class="form-control" :value="config" @change="updateActionValue(actionKey, $event.target.value)">
+                                                <option :value="0">0 - 不停止</option>
+                                                <option :value="1">1 - 停止BGM</option>
+                                            </select>
+                                        </div>
+
+                                        <div v-else style="margin-bottom: 12px;">
+                                            <input v-if="typeof config === 'number'" type="number" class="form-control" :value="config"
+                                                   @input="updateActionValue(actionKey, $event.target.value)">
+                                            <input v-else-if="typeof config === 'string'" type="text" class="form-control" :value="config"
+                                                   @input="updateActionValue(actionKey, $event.target.value)">
+                                            <div v-else style="font-size: 11px; color: var(--text-secondary);">复杂对象，请在JSON源码中编辑</div>
+                                        </div>
+
+                                        <button class="btn btn-danger" style="font-size: 12px;" @click="removeAction(actionKey)">删除此动作</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section" v-if="hasReplay(jsonType) && replayData">
+                            <div class="section-title">🔄 回放信息 (Replay)</div>
+                            <div class="form-row">
+                                <label class="form-label">名称</label>
+                                <input type="text" class="form-control" :value="replayData.name" @input="updateReplayField('name', $event.target.value)">
+                            </div>
+                            <div class="form-row">
+                                <label class="form-label">special_name</label>
+                                <input type="text" class="form-control" :value="replayData.special_name" @input="updateReplayField('special_name', $event.target.value)">
+                            </div>
+                            <div class="form-row-grid">
+                                <div>
+                                    <label class="form-label">background_index</label>
+                                    <input type="number" class="form-control" :value="replayData.background_index" @input="updateReplayField('background_index', $event.target.value)">
+                                </div>
+                                <div>
+                                    <label class="form-label">order</label>
+                                    <input type="number" class="form-control" step="0.01" :value="replayData.order" @input="updateReplayField('order', $event.target.value)">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-section" v-if="hasPrecreate(jsonType) && precreateData">
+                            <div class="section-title">🎬 预创建 (Precreate)</div>
+                            <div class="form-row">
+                                <label class="form-label">角色</label>
+                                <div>
+                                    <div v-for="(c, idx) in precreateData.character" :key="'c'+idx"
+                                         style="display: flex; gap: 8px; margin-bottom: 4px; align-items: center;">
+                                        <input type="number" class="form-control" style="width: 80px;" :value="c"
+                                               @input="updatePrecreateArrayItem('character', idx, $event.target.value)">
+                                        <input type="number" class="form-control" style="width: 80px;" :value="precreateData.sprite_index[idx]"
+                                               @input="updatePrecreateArrayItem('sprite_index', idx, $event.target.value)" placeholder="立绘">
+                                        <select class="form-control" style="width: 100px;" :value="precreateData.position[idx]"
+                                                @change="updatePrecreateArrayItem('position', idx, $event.target.value)">
+                                            <option v-for="p in positionOptions" :key="p.value" :value="p.value">{{ p.label }}</option>
+                                        </select>
+                                        <button class="btn btn-danger" style="padding: 4px 8px;" @click="removePrecreateItem('character', idx); removePrecreateItem('sprite_index', idx); removePrecreateItem('position', idx)">×</button>
+                                    </div>
+                                    <button class="btn btn-secondary" style="font-size: 12px;" @click="addPrecreateItem('character'); addPrecreateItem('sprite_index'); addPrecreateItem('position')">+ 添加角色</button>
+                                </div>
+                            </div>
+                        </div>
+                        </template>
+                    </div>
+                    <div v-else class="empty-state">
+                        <div class="empty-icon">🎨</div>
+                        <div>选择一个条目开始编辑</div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 未知/空状态 -->
+            <template v-else>
+                <div class="welcome-panel">
+                    <div class="welcome-content">
+                        <div class="welcome-icon">🎮</div>
+                        <h2>MVZ2 文本编辑器</h2>
+                        <p>支持所有游戏文本JSON类型的可视化编辑</p>
+                        <div v-for="cat in typeCategories" :key="cat" style="margin-bottom: 24px;">
+                            <h3 style="font-size: 14px; color: var(--accent); margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px;">{{ cat }}</h3>
+                            <div class="type-grid">
+                                <div v-for="t in getTypesByCategory(cat)" :key="t.key" class="type-card" @click="setType(t.key)">
+                                    <div class="type-card-icon">{{ t.icon }}</div>
+                                    <div class="type-card-label">{{ t.label }}</div>
+                                    <div class="type-card-desc">{{ t.desc }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </template>
+
+            <!-- 右侧JSON面板 (始终显示) -->
+            <div class="right-panel" v-if="jsonType">
+                <div class="preview-panel" v-if="isDialogType(jsonType) && currentEntry">
+                    <div class="panel-header"><span>👁️ 实时预览</span></div>
+                    <div class="preview-content">
+                        <div class="preview-scene">
+                            <div class="preview-effects" v-if="currentEntry.effect">
+                                <div class="effect-indicator" title="特效激活">⚡</div>
+                            </div>
+                            <div class="preview-characters">
+                                <img v-if="isRecycleDialogType(jsonType) && currentEntry.sayingOne !== undefined && currentEntry.sayingOne >= 0"
+                                     :src="'img/chars/' + Math.min(currentEntry.sayingOne, 29) + '.png'">
+                                <img v-else-if="currentEntry.character !== undefined && currentEntry.character >= 0"
+                                     :src="'img/chars/' + Math.min(currentEntry.character, 29) + '.png'">
+                            </div>
+                            <div class="preview-dialogue">
+                                <div class="preview-speaker">{{ isRecycleDialogType(jsonType) ? getCharacterName(currentEntry.sayingOne) : getCharacterName(currentEntry.character) }}</div>
+                                <div class="preview-text">{{ isRecycleDialogType(jsonType) ? (currentEntry.txt_0 || '...') : (currentEntry.text || '...') }}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="json-panel">
+                    <div class="panel-header"><span>📝 {{ isTxtMode ? 'TXT源码' : 'JSON源码' }} (双向同步)</span></div>
+                    <textarea class="json-editor" v-model="jsonText" @input="handleJsonInput" spellcheck="false"></textarea>
+                    <div v-if="jsonError" class="json-error">⚠️ {{ jsonError }}</div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showImportModal" class="modal-overlay" @click.self="showImportModal = false">
+            <div class="modal-content">
+                <div class="modal-title">导入数据</div>
+                <textarea class="form-control" v-model="importText"
+                          style="min-height: 300px; font-family: monospace; margin-bottom: 16px;"
+                          placeholder="在此粘贴JSON或TXT数据..."></textarea>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" @click="showImportModal = false">取消</button>
+                    <button class="btn btn-primary" @click="confirmImport">确认导入</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="contextMenu.visible" class="context-menu"
+             :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+             @click.stop>
+            <div class="context-menu-item" @click="contextInsertBefore">⬆️ 在上方插入</div>
+            <div class="context-menu-item" @click="contextInsertAfter">⬇️ 在下方插入</div>
+            <div class="context-menu-separator"></div>
+            <div class="context-menu-item" @click="contextRename">✏️ 重命名</div>
+            <div class="context-menu-separator"></div>
+            <div class="context-menu-item danger" @click="contextDelete">🗑️ 删除</div>
+        </div>
+    </div>
+
+    <script src="js/vue.global.js"></script>
+    <script src="js/constants.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/app.js"></script>
+    <script>
+        MVZ2App.createEditorApp().mount('#app');
+    </script>
+</body>
+</html>
